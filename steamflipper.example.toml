@@ -56,6 +56,17 @@ timeout_connect_ms = 5000
 timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
+[donate]
+# Contribute manifest request codes for depots this account owns.
+# Set enabled = false to opt out completely.
+enabled = true
+# url = "https://manifest.luastools.xyz"
+# interval_secs = 30
+# wanted_refresh_secs = 300
+# max_mints_per_cycle = 25
+# min_mint_interval_ms = 2000
+# max_mints_per_session = 0
+
 [stats]
 # Automatically query https://stats.steamflipper.com/{appid} for a recommended
 # SteamID when no Lua setStat(appid, "steamid") override exists.

@@ -7,6 +7,7 @@
 #include "Utils/CloudSaves/CloudSaves.h"
 #include "Utils/LuaFlipperUI/LuaFlipperUI.h"
 #include "Utils/SteamMetadata/IPCLoader.h"
+#include "Utils/SteamMetadata/ManifestDonor.h"
 #include "Utils/SteamMetadata/PatternLoader.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include "Utils/Tokeer/TokeerBridge.h"
@@ -135,6 +136,14 @@ static uint32_t InitThread(SFPlatform::DynamicLibrary::ModuleHandle selfModule) 
     // Linux build exports no host API and its own hooks do not match this
     // client, so the RPCs are answered in-process instead.
     CloudSaves::Initialize(SteamInstallPath);
+    // Contributes manifest request codes for depots this account owns, on
+    // request. Started after the hooks are in place because it needs the
+    // netpacket send path; it idles until the license list resolves anyway.
+    ManifestDonor::Start();
+
+    // Register the bst:// URI scheme so the website can drive code redemption via this
+    // DLL (rundll32 handler). HKCU, no admin; idempotent.
+    TokeerBridge::RegisterUriScheme(std::string(SteamInstallPath) + "\\OpenSteamTool.dll");
 
     // In-client LUAFlipper UI. Injects over CEF's debugger, so it is started
     // last: CEF is not up yet at this point and the thread polls for it.

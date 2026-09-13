@@ -40,18 +40,36 @@ namespace ManifestClient {
 
     struct Provider {
         std::string_view name;          // matches [manifest] url = "..."
-        const char*      urlTemplate;   // full literal with one %llu — for log & path
+        const char*      urlTemplate;   // one %llu (gid) — the pre-2026-09-09 shape
+        // Optional depot-aware form: %u app, %u depot, %llu gid. Preferred
+        // whenever the caller knows the depot, and required for correctness —
+        // see kProviders below. nullptr for providers that only speak gid.
+        const char*      urlTemplateEx;
         Parser           parse;
     };
 
-    consteval Provider Make(std::string_view name, const char* url, Parser parse) {
-        return {name, url, parse};
+    consteval Provider Make(std::string_view name, const char* url, const char* urlEx, Parser parse) {
+        return {name, url, urlEx, parse};
     }
 
+    // Valve made the request code depot-bound on 2026-09-09: it is derived from
+    // (depot_id, manifest_id, time, secret), and the CDN answers 401 for a code
+    // minted against any other depot. A gid-only request cannot name the depot,
+    // so the server falls back to a free-to-play carrier and the resulting code
+    // only works for 731/571/441 — every other depot 401s at the CDN and Steam
+    // reports "Failed downloading 1 manifests".
+    //
+    // So the three-segment form is not an optimisation, it is the only shape
+    // that works for ordinary depots. The gid-only template is kept solely as a
+    // fallback for when the depot is genuinely unknown, and for the two
+    // third-party providers that expose no depot-aware route.
     static constexpr Provider kProviders[] = {
-        Make("opensteamtool", "https://manifest.opensteamtool.com/%llu",       ParsePlainUint),
-        Make("wudrm",         "http://gmrc.wudrm.com/manifest/%llu",           ParsePlainUint),
-        Make("steamrun",      "https://manifest.steam.run/api/manifest/%llu",  ParseSteamRunJson),
+        Make("opensteamtool", "https://manifest.opensteamtool.com/%llu",
+                              "https://manifest.opensteamtool.com/%u/%u/%llu",  ParsePlainUint),
+        Make("wudrm",         "http://gmrc.wudrm.com/manifest/%llu",
+                              nullptr,                                          ParsePlainUint),
+        Make("steamrun",      "https://manifest.steam.run/api/manifest/%llu",
+                              nullptr,                                          ParseSteamRunJson),
     };
 
     static const Provider* g_active = &kProviders[0];   // steamflipper
@@ -80,12 +98,19 @@ namespace ManifestClient {
 
     // ── fetch ─────────────────────────────────────────────────────
 
-    static bool FetchActive(uint64_t gid, uint64_t* outCode) {
+    static bool FetchActive(uint64_t gid, uint64_t* outCode, AppId_t appId, AppId_t depotId) {
         const Provider& p = *g_active;
         const Config::ManifestTimeouts timeouts = Config::GetManifestTimeouts();
 
+        // app_id does not change the code — it only satisfies Steam's access
+        // check on the named depot — so 0 is a valid value to send and only the
+        // depot has to be right.
         char urlLog[256];
-        std::snprintf(urlLog, sizeof(urlLog), p.urlTemplate, gid);
+        const bool depotAware = p.urlTemplateEx && depotId;
+        if (depotAware)
+            std::snprintf(urlLog, sizeof(urlLog), p.urlTemplateEx, appId, depotId, gid);
+        else
+            std::snprintf(urlLog, sizeof(urlLog), p.urlTemplate, gid);
 
         auto r = SFPlatform::Http::Execute(
             L"GET",
@@ -98,7 +123,11 @@ namespace ManifestClient {
             timeouts.send,
             timeouts.recv);
 
-        LOG_MANIFEST_INFO("Manifest {} status={} gid={}", p.name, r.status, gid);
+        // Log which shape was used: a gid-only request for a non-carrier depot
+        // yields a code the CDN will reject, and that is otherwise invisible
+        // until the download fails.
+        LOG_MANIFEST_INFO("Manifest {} status={} gid={} depot={} shape={}",
+                          p.name, r.status, gid, depotId, depotAware ? "app/depot/gid" : "gid-only");
 
         if (!r.ok || r.status != 200) return false;
         return p.parse(r.body, outCode);
@@ -127,6 +156,6 @@ namespace ManifestClient {
             LOG_MANIFEST_WARN("Manifest gid={} lua returned nil, falling back to config", manifestGid);
         }
 
-        return FetchActive(manifestGid, outRequestCode);
+        return FetchActive(manifestGid, outRequestCode, appId, depotId);
     }
 }
