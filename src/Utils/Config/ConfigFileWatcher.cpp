@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include "Hook/Hooks_NetPacket.h"
 #include "Hook/Hooks_Package.h"
 #include "Utils/Config/Config.h"
 #include "Utils/Config/LuaConfig.h"
@@ -9,7 +10,10 @@
 
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <filesystem>
+#include <fstream>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -61,6 +65,37 @@ void RestartLuaWatcher() {
     LOG_INFO("Lua directories refreshed after config reload: {}", static_cast<uint32_t>(watchDirs.size()));
 }
 
+constexpr std::string_view kProbeFileName = "manifest_probe.txt";
+
+void ProcessProbeFile() {
+    const std::filesystem::path path =
+        std::filesystem::path(g_configPath).parent_path() / kProbeFileName;
+
+    std::ifstream in(path);
+    if (!in) return;
+
+    uint32_t requested = 0, accepted = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        const size_t hash = line.find('#');
+        if (hash != std::string::npos) line.erase(hash);
+        const size_t first = line.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) continue;
+        const size_t last = line.find_last_not_of(" \t\r\n");
+        line = line.substr(first, last - first + 1);
+
+        uint32_t depotId = 0;
+        if (std::from_chars(line.data(), line.data() + line.size(), depotId).ec != std::errc{} ||
+            depotId == 0) {
+            LOG_WARN("manifest_probe: ignoring unparseable line \"{}\"", line);
+            continue;
+        }
+        ++requested;
+        if (Hooks_NetPacket::ProbeManifest(depotId)) ++accepted;
+    }
+    LOG_INFO("manifest_probe: {} depot(s) read, {} request(s) sent", requested, accepted);
+}
+
 void ReloadConfig() {
     LOG_INFO("Reloading config: {}", g_configPath);
 
@@ -96,10 +131,15 @@ void WatcherThread() {
     SFPlatform::DirectoryWatch::Watch* watchPtr = &watch;
     std::vector<SFPlatform::DirectoryWatch::Watch*> watches{watchPtr};
 
+    struct Touched { bool config = false; bool probe = false; };
+
     auto drainEvent = [&]() {
-        bool changed = ContainsConfigChange(watch.Drain(), targetFileName);
+        const auto changes = watch.Drain();
+        Touched touched;
+        touched.config = ContainsConfigChange(changes, targetFileName);
+        touched.probe  = ContainsConfigChange(changes, kProbeFileName);
         watch.IssueRead();
-        return changed;
+        return touched;
     };
 
     while (g_running) {
@@ -109,18 +149,19 @@ void WatcherThread() {
         if (waitResult.status == SFPlatform::DirectoryWatch::WaitStatus::Timeout) continue;
         if (waitResult.status != SFPlatform::DirectoryWatch::WaitStatus::Signaled) continue;
 
-        bool changed = drainEvent();
+        Touched touched = drainEvent();
         while (g_running) {
             auto debounceResult = SFPlatform::DirectoryWatch::WaitAny(watches, kDebounceMs);
             if (!g_running) break;
             if (debounceResult.status == SFPlatform::DirectoryWatch::WaitStatus::Timeout) break;
             if (debounceResult.status != SFPlatform::DirectoryWatch::WaitStatus::Signaled) break;
-            changed = drainEvent() || changed;
+            const Touched more = drainEvent();
+            touched.config = touched.config || more.config;
+            touched.probe  = touched.probe  || more.probe;
         }
 
-        if (changed) {
-            ReloadConfig();
-        }
+        if (touched.config) ReloadConfig();
+        if (touched.probe)  ProcessProbeFile();
     }
 
     watch.Cancel();

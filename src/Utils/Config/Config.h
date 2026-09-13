@@ -46,6 +46,18 @@ namespace Config {
     CloudSettings GetCloudSettings();
     bool GetStatsEnableApi();
     bool GetUpdateEnabled();
+
+    // [donate] — contribute manifest request codes for depots this account owns.
+    struct DonateSettings {
+        bool        enabled  = true;
+        std::string url;
+        uint32_t    intervalSecs        = 30;
+        uint32_t    maxMintsPerCycle    = 25;
+        uint32_t    minMintIntervalMs   = 2000;
+        uint32_t    maxMintsPerSession  = 0;
+        uint32_t    wantedRefreshSecs   = 300;
+    };
+    DonateSettings GetDonateSettings();
     bool GetUpdateAutoInstall();
 
     // [keys].auto_sync - write the manifests' depot keys into config.vdf on
@@ -114,6 +126,9 @@ namespace Config {
 
     // [update] - self-update check on startup (staged for next Steam launch).
     inline bool updateEnabled = true;
+
+    // [donate] - mint manifest request codes on request for owned depots.
+    inline DonateSettings donate;
 
     // [update].auto_install - do the whole update on startup, unasked: pull,
     // close Steam, build, install, start again. Off by default and opt-in for

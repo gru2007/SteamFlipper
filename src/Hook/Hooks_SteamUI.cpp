@@ -15,16 +15,35 @@ namespace
     CAPTURE_THIS_FUNC(GetAppByID, CSteamApp*, g_pController,void* pThis, AppId_t appId, bool bCreate);
     CAPTURE_THIS_FUNC(MarkAppChange,void*,g_pAppChangeSource,void* pThis,AppId_t appId, EAppChangeFlags changeFlags);
 
+    // Apps currently downloading/updating (AppStateFlags UpdateRunning/Started).
+    // Maintained here on the UI thread; read from other threads under the lock.
+    std::mutex g_activeDlMutex;
+    std::unordered_set<AppId_t> g_activeDl;
+
     HOOK_FUNC(FillInAppOverview, void *, void *pThis, void *pAppOverview, CSteamApp *pApp)
     {
-        if (pApp && LuaConfig::HasDepot(pApp->nAppID, false))
+        if (pApp)
         {
-            uint32_t t = LuaConfig::GetPurchaseTime(pApp->nAppID);
-            if (t)
+            // Track whether this app is actively downloading, so the manifest
+            // path can tell a real user download from a background scheduled
+            // update. UpdateRunning|UpdateStarted = a download is actually going.
+            const bool active = (pApp->AppStateFlags &
+                (k_EAppStateUpdateRunning | k_EAppStateUpdateStarted)) != 0;
             {
-                pApp->PurchasedTime = t;
-                LOG_STEAMUI_TRACE("FillInAppOverview: set PurchasedTime={} for appId={}",
-                                  pApp->PurchasedTime, pApp->nAppID);
+                std::lock_guard<std::mutex> lock(g_activeDlMutex);
+                if (active) g_activeDl.insert(pApp->nAppID);
+                else        g_activeDl.erase(pApp->nAppID);
+            }
+
+            if (LuaConfig::HasDepot(pApp->nAppID, false))
+            {
+                uint32_t t = LuaConfig::GetPurchaseTime(pApp->nAppID);
+                if (t)
+                {
+                    pApp->PurchasedTime = t;
+                    LOG_STEAMUI_TRACE("FillInAppOverview: set PurchasedTime={} for appId={}",
+                                      pApp->PurchasedTime, pApp->nAppID);
+                }
             }
         }
         return oFillInAppOverview(pThis, pAppOverview, pApp);
@@ -125,5 +144,11 @@ namespace Hooks_SteamUI
         std::lock_guard<std::mutex> lock(g_removalMutex);
         std::erase(g_pendingRemovals, appId);
         g_removedAppIds.erase(appId);
+    }
+
+    size_t ActiveDownloadCount()
+    {
+        std::lock_guard<std::mutex> lock(g_activeDlMutex);
+        return g_activeDl.size();
     }
 }

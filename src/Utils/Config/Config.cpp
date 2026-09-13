@@ -19,6 +19,7 @@ namespace {
         std::vector<std::string> remoteUrlTemplates;
         bool statsEnableApi = true;
         bool updateEnabled = true;
+        DonateSettings donate;
         bool updateAutoInstall = false;
         bool keysAutoSync = false;
         std::string updateRepo;
@@ -65,6 +66,7 @@ namespace {
         remoteUrlTemplates     = snapshot.remoteUrlTemplates;
         statsEnableApi         = snapshot.statsEnableApi;
         updateEnabled          = snapshot.updateEnabled;
+        donate                 = snapshot.donate;
         updateAutoInstall      = snapshot.updateAutoInstall;
         keysAutoSync           = snapshot.keysAutoSync;
         updateRepo             = snapshot.updateRepo;
@@ -165,6 +167,28 @@ namespace {
                 } else if (auto val = (*remote)["url_template"].value<std::string>()) {
                     snapshot.remoteUrlTemplates.push_back(*val);
                 }
+            }
+
+            // [donate]
+            if (auto donateTbl = tbl["donate"].as_table()) {
+                if (auto v = (*donateTbl)["enabled"].value<bool>())    snapshot.donate.enabled = *v;
+                if (auto v = (*donateTbl)["url"].value<std::string>()) snapshot.donate.url = *v;
+
+                auto readClamped = [&](const char* key, uint32_t lo, uint32_t hi, uint32_t& out) {
+                    auto v = (*donateTbl)[key].value<int64_t>();
+                    if (!v) return;
+                    if (*v < lo || *v > hi) {
+                        LOG_WARN("[donate] {} = {} out of range [{}, {}], keeping {}",
+                                 key, *v, lo, hi, out);
+                        return;
+                    }
+                    out = static_cast<uint32_t>(*v);
+                };
+                readClamped("interval_secs",        30,  86400, snapshot.donate.intervalSecs);
+                readClamped("max_mints_per_cycle",   1,    500, snapshot.donate.maxMintsPerCycle);
+                readClamped("min_mint_interval_ms",  0,  60000, snapshot.donate.minMintIntervalMs);
+                readClamped("max_mints_per_session", 0, 100000, snapshot.donate.maxMintsPerSession);
+                readClamped("wanted_refresh_secs",  30,  86400, snapshot.donate.wantedRefreshSecs);
             }
 
             // [stats]
@@ -341,6 +365,11 @@ namespace {
     bool GetDiagnosticsPopups() {
         std::lock_guard lock(g_mutex);
         return diagnosticsPopups;
+    }
+
+    DonateSettings GetDonateSettings() {
+        std::lock_guard lock(g_mutex);
+        return donate;
     }
 
     bool GetUpdateEnabled() {

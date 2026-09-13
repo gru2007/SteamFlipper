@@ -35,3 +35,4 @@ config.vdf.bst-*.bak
 *.dll.config
 *.nuget.props
 *.nuget.targets
+/examples
